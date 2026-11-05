@@ -162,9 +162,16 @@ Cache records are stored in `.context/eval-result-cache/` by default. The cache 
 
 ## Environment Variables
 
-- `EVAL_MODELS` — not set: single run with env model; `all`: all models; comma-separated: specific models
+- `EVAL_MODELS` — not set: single run with the catalog's `gpt-6-luna` preset; `all`: all models; comma-separated: specific models; or a JSON array of model objects
+- `EVAL_MODEL_CATALOG_FILE` — JSON object of extra model shorthands (`provider`, `model`, `label`, optional `apiKeyEnv`, `includeInAll`) merged over the built-in catalog, so a private model list stays out of the repo. `apiKeyEnv` names the only variable that model's key is read from
 - `EVAL_REPORT_PATH` — save markdown + JSON report to file
-- `EVAL_HISTORY_DIR` — save per-run JSON history; defaults to `.context/eval-results` for AI evals; set `off` to disable
+- `EVAL_HISTORY_DIR` — save per-run JSON history; defaults to `.context/eval-results` for AI evals and `runEvalSuite` runs; set `off` to disable
+- `EVAL_RUN_LOG` — append one content-free JSON line per `runEvalSuite` run (time, eval, model, case ids, served models, judge, data roots), for runs over private data
+- `EVAL_DATA_DIRS` — dataset roots outside the repo, separated by the platform path delimiter (`:` on macOS/Linux, `;` on Windows)
+
+The polish-draft suite (`suites/polish-draft-data.test.ts`, cases in `<root>/polish-draft/`, invented examples in `fixtures/synthetic/`) runs `aiPolishDraft` and grades per-case criteria. Which of two models writes better is decided by blind pairwise reading: `pnpm --filter inbox-zero-ai eval:pairwise export|tally` pairs the samples that passed every criterion, hides the model names, and applies an exact sign test (a winner needs 9 of 10, 15 of 20 or 27 of 40 non-tied judgments).
+
+A model that names a provider but has no key is not rejected: `getModel` serves the deployment default under that model's label. `runEvalSuite` therefore takes `captureUsage` and `expectedServedModel`; the draft-reply runner passes both, so a sample served by any other model fails with `served_model_mismatch` and records tokens and cost per sample.
 - `EVAL_RESULT_CACHE` — opt into scenario-level result caching: `readwrite`, `readonly`, or `refresh`
 - `EVAL_RESULT_CACHE_DIR` — cache directory; defaults to `.context/eval-result-cache`
 

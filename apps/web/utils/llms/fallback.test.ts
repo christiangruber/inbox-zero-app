@@ -494,6 +494,43 @@ describe("createGenerateText fallback chain", () => {
     );
   });
 
+  it("records the billed Vercel AI Gateway cost, surcharges included", async () => {
+    const model = createModel("gateway-model");
+    mockGenerateText.mockResolvedValue(
+      createTextResult({
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        providerMetadata: createGatewayCostMetadata("0.00030418", "0.00000418"),
+        steps: [
+          {
+            providerMetadata: createGatewayCostMetadata(
+              "0.00030418",
+              "0.00000418",
+            ),
+          },
+        ],
+      }),
+    );
+
+    const generateText = createGenerateTextForTest({
+      label: "Gateway call",
+      modelOptions: createModelOptions({
+        provider: "aigateway",
+        modelName: "openai/gpt-6-luna",
+        model,
+      }),
+    });
+
+    await generateText({ prompt: "hello", model });
+
+    expect(mockSaveAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerReportedCost: 0.000_304_18,
+        providerUpstreamInferenceCost: 0.000_004_18,
+        providerCostSource: "gateway_step_cost_sum",
+      }),
+    );
+  });
+
   it("counts top-level tool calls when steps are absent", async () => {
     const model = createModel("openrouter-model");
     mockGenerateText.mockResolvedValue(
@@ -805,6 +842,16 @@ function createTextResult(overrides: Record<string, unknown> = {}) {
     usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
     toolCalls: [],
     ...overrides,
+  };
+}
+
+function createGatewayCostMetadata(gatewayCost: string, inferenceCost: string) {
+  return {
+    gateway: {
+      cost: inferenceCost,
+      gatewayCost,
+      inferenceCost,
+    },
   };
 }
 

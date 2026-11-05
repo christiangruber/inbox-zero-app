@@ -28,6 +28,7 @@ function getEvalJudgeApiKey(provider: string) {
     google: process.env.GOOGLE_API_KEY,
     groq: process.env.GROQ_API_KEY,
     cerebras: process.env.CEREBRAS_API_KEY,
+    aigateway: process.env.AI_GATEWAY_API_KEY,
   };
 
   return providerApiKeys[provider];

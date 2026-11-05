@@ -195,7 +195,11 @@ type LlmFallbackFailure = {
   category: LlmFallbackFailureCategory;
 };
 
-type ProviderCostSource = "openrouter_usage" | "openrouter_step_usage_sum";
+type ProviderCostSource =
+  | "openrouter_usage"
+  | "openrouter_step_usage_sum"
+  | "gateway_cost"
+  | "gateway_step_cost_sum";
 
 type UsageMetadata = {
   providerReportedCost?: number;
@@ -1839,7 +1843,10 @@ function dedupeRepairCandidates(
 function getUsageMetadata(result: unknown): UsageMetadata {
   const stepCount = getStepCount(result);
   const toolCallCount = getToolCallCount(result);
-  const providerCost = getOpenRouterProviderCost(result);
+  const openRouterCost = getOpenRouterProviderCost(result);
+  const providerCost = openRouterCost.providerCostSource
+    ? openRouterCost
+    : getGatewayProviderCost(result);
 
   return {
     stepCount,
@@ -1958,6 +1965,58 @@ function getOpenRouterProviderCost(result: unknown): {
     providerUpstreamInferenceCost: directUsage.upstreamInferenceCost,
     providerCostSource: "openrouter_usage",
   };
+}
+
+/**
+ * Vercel AI Gateway reports the billed amount, including its per-request
+ * surcharges for zero data retention, region pinning and allowlists, as
+ * `gatewayCost`; `inferenceCost` is the model's own share.
+ */
+function getGatewayProviderCost(result: unknown): {
+  providerReportedCost?: number;
+  providerUpstreamInferenceCost?: number;
+  providerCostSource?: ProviderCostSource;
+} {
+  const stepCosts = (getObjectArrayProperty(result, "steps") ?? [])
+    .map(getGatewayCost)
+    .filter((cost) => cost !== null);
+
+  if (stepCosts.length > 0) {
+    return {
+      providerReportedCost: sumDefined(stepCosts.map((cost) => cost.billed)),
+      providerUpstreamInferenceCost: sumDefined(
+        stepCosts.map((cost) => cost.inference),
+      ),
+      providerCostSource: "gateway_step_cost_sum",
+    };
+  }
+
+  const directCost = getGatewayCost(result);
+  if (!directCost) return {};
+
+  return {
+    providerReportedCost: directCost.billed,
+    providerUpstreamInferenceCost: directCost.inference,
+    providerCostSource: "gateway_cost",
+  };
+}
+
+function getGatewayCost(value: unknown): {
+  billed?: number;
+  inference?: number;
+} | null {
+  const providerMetadata = getObjectProperty(value, "providerMetadata");
+  const gatewayMetadata = getObjectProperty(providerMetadata, "gateway");
+  const billed =
+    getFiniteNumber(getProperty(gatewayMetadata, "gatewayCost")) ??
+    getFiniteNumber(getProperty(gatewayMetadata, "cost"));
+  const inference =
+    getFiniteNumber(getProperty(gatewayMetadata, "inferenceCost")) ??
+    getFiniteNumber(getProperty(gatewayMetadata, "cost"));
+
+  if (billed === undefined && inference === undefined) return null;
+
+  return { billed, inference };
 }
 
 function sumDefined(values: Array<number | undefined>) {

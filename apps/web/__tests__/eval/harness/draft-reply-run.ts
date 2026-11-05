@@ -17,6 +17,10 @@ import {
 } from "@/__tests__/eval/harness/run-suite";
 import { judgeSendReady } from "@/__tests__/eval/harness/send-ready-judge";
 import { getJudgeIdentity } from "@/__tests__/eval/harness/judge-model";
+import {
+  captureAiUsage,
+  getRequestedModel,
+} from "@/__tests__/eval/harness/usage-capture";
 import { contentHashForCase } from "@/__tests__/eval/harness/split-lock";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 
@@ -70,6 +74,8 @@ export function runDraftReplyEval<
     filters,
     writeHistory,
     onRecord,
+    captureUsage: captureAiUsage,
+    expectedServedModel: getRequestedModel(emailAccount),
     invoke: ({ evalCase }) => invokeDraftReply({ evalCase, emailAccount }),
     assert: ({ evalCase, output }) =>
       runDraftReplyAssertions({

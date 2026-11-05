@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   EVAL_MODEL_CATALOG,
@@ -100,6 +103,69 @@ describe("shouldRunEvalTests", () => {
       aiModel: "google/gemini-3.1-flash-lite",
       aiApiKey: "shared-key",
     });
+  });
+
+  it("passes the AI Gateway key so a gateway model is not silently swapped for the default", () => {
+    process.env.AI_GATEWAY_API_KEY = "gateway-key";
+
+    const emailAccount = getEmailAccountForModel({
+      provider: "aigateway",
+      model: "anthropic/claude-sonnet-5.5",
+      label: "Sonnet via gateway",
+    });
+
+    expect(emailAccount.user.aiApiKey).toBe("gateway-key");
+  });
+
+  it("uses only the named key variable when a model declares one", () => {
+    process.env.LLM_API_KEY = "shared-key";
+    delete process.env.EU_PROVIDER_KEY;
+    const model = {
+      provider: "openai-compatible",
+      model: "eu-model",
+      label: "EU model",
+      apiKeyEnv: "EU_PROVIDER_KEY",
+    };
+
+    expect(getEmailAccountForModel(model).user.aiApiKey).toBeNull();
+
+    process.env.RUN_AI_TESTS = "true";
+    process.env.EVAL_MODELS = JSON.stringify([model]);
+    expect(shouldRunEvalTests()).toBe(false);
+
+    process.env.EU_PROVIDER_KEY = "eu-key";
+    expect(getEmailAccountForModel(model).user.aiApiKey).toBe("eu-key");
+    expect(shouldRunEvalTests()).toBe(true);
+  });
+
+  it("merges a private catalog file over the built-in shorthands", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "eval-catalog-"));
+    const file = path.join(dir, "models.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        "sonnet-5.5-gateway": {
+          provider: "aigateway",
+          model: "anthropic/claude-sonnet-5.5",
+          label: "Claude Sonnet 5.5 (Gateway)",
+          apiKeyEnv: "AI_GATEWAY_API_KEY",
+        },
+      }),
+    );
+    try {
+      process.env.EVAL_MODEL_CATALOG_FILE = file;
+      process.env.EVAL_MODELS = "sonnet-5.5-gateway,gpt-6-luna";
+
+      expect(getEvalModels().map((model) => model.label)).toEqual([
+        "Claude Sonnet 5.5 (Gateway)",
+        "GPT-6 Luna",
+      ]);
+
+      writeFileSync(file, JSON.stringify({ broken: { provider: "x" } }));
+      expect(() => getEvalModels()).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("does not treat unrelated provider keys as valid for openrouter eval presets", () => {

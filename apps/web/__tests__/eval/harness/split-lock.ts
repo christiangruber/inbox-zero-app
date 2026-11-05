@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { z } from "zod";
 import {
   evalSplitSchema,
@@ -62,6 +63,15 @@ export function contentHashForCase(evalCase: HashableCase): string {
 export function loadSplitLock(lockPath: string): SplitLock {
   if (!existsSync(lockPath)) return {};
   return splitLockSchema.parse(JSON.parse(readFileSync(lockPath, "utf8")));
+}
+
+/** Later roots override earlier ones, matching how cases themselves overlay. */
+export function loadMergedSplitLock(dataRoots: string[]): SplitLock {
+  const merged: SplitLock = {};
+  for (const root of dataRoots) {
+    Object.assign(merged, loadSplitLock(path.join(root, SPLIT_LOCK_FILENAME)));
+  }
+  return merged;
 }
 
 export function writeSplitLock(lock: SplitLock, lockPath: string) {

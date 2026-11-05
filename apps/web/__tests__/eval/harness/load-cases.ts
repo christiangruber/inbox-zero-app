@@ -19,9 +19,11 @@ export type LoadCasesResult<T> = {
 };
 
 /**
- * Case data lives outside this repository. `EVAL_DATA_DIRS` is a colon-separated
- * list of dataset roots; later roots win on id collision so an overlay can patch
- * a case without editing the file it came from.
+ * Case data lives outside this repository. `EVAL_DATA_DIRS` is a list of
+ * dataset roots separated by the platform path delimiter (`:` on macOS and
+ * Linux, `;` on Windows, where `:` is part of every drive path); later roots win
+ * on id collision so an overlay can patch a case without editing the file it
+ * came from.
  *
  * Empty is a supported state, not an error: this repo is open source and most
  * contributors will never have the private dataset. Suites skip themselves.
@@ -139,7 +141,7 @@ export function formatLoadIssues(issues: LoadIssue[]): string {
 
 function splitDirs(value: string): string[] {
   return value
-    .split(":")
+    .split(path.delimiter)
     .map((entry) => entry.trim())
     .filter(Boolean)
     .map((entry) => path.resolve(entry));

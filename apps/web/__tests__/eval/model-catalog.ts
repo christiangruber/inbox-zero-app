@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { z } from "zod";
 import { getEmailAccount } from "@/__tests__/helpers";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { Provider } from "@/utils/llms/config";
@@ -6,13 +8,20 @@ import { Provider } from "@/utils/llms/config";
  * Which model is under test, and how to authenticate it. Kept free of vitest so
  * standalone eval scripts running under tsx can select a model the same way the
  * vitest matrix does.
+ *
+ * `apiKeyEnv` names the one variable that holds this model's key. Without it the
+ * key is looked up per provider, where shared fallbacks such as LLM_API_KEY can
+ * send one provider's key to another.
  */
-export interface EvalModel {
-  includeInAll?: boolean;
-  label: string;
-  model: string;
-  provider: string;
-}
+const evalModelSchema = z.object({
+  includeInAll: z.boolean().optional(),
+  label: z.string().min(1),
+  model: z.string().min(1),
+  provider: z.string().min(1),
+  apiKeyEnv: z.string().min(1).optional(),
+});
+
+export type EvalModel = z.infer<typeof evalModelSchema>;
 
 export const EVAL_MODEL_CATALOG: Record<string, EvalModel> = {
   "deepseek-v4-flash": {
@@ -115,12 +124,17 @@ export const EVAL_MODEL_CATALOG: Record<string, EvalModel> = {
  * - EVAL_MODELS=gemini-2.5-flash     single model by shorthand
  * - EVAL_MODELS=gemini-2.5-flash,gpt-5.4-mini   comma-separated shorthand picks
  * - EVAL_MODELS=[{...}]             custom JSON array
+ *
+ * EVAL_MODEL_CATALOG_FILE points at a JSON object of extra shorthands, merged
+ * over the built-in catalog, so a private model list (new releases, keys named
+ * per model) never has to be committed.
  */
 export function getEvalModels(): EvalModel[] {
   const envModels = process.env.EVAL_MODELS;
   if (!envModels) return [];
+  const catalog = getEvalModelCatalog();
   if (envModels === "all") {
-    return Object.entries(EVAL_MODEL_CATALOG)
+    return Object.entries(catalog)
       .filter(([, model]) => model.includeInAll !== false)
       .map(([, model]) => model);
   }
@@ -138,15 +152,25 @@ export function getEvalModels(): EvalModel[] {
     .map((name) => name.trim())
     .filter(Boolean)
     .map((name) => {
-      const preset = EVAL_MODEL_CATALOG[name];
+      const preset = catalog[name];
       if (!preset) {
         console.warn(
-          `Unknown eval model shorthand: "${name}". Available: ${Object.keys(EVAL_MODEL_CATALOG).join(", ")}`,
+          `Unknown eval model shorthand: "${name}". Available: ${Object.keys(catalog).join(", ")}`,
         );
       }
       return preset;
     })
     .filter((m): m is EvalModel => m != null);
+}
+
+export function getEvalModelCatalog(): Record<string, EvalModel> {
+  const file = process.env.EVAL_MODEL_CATALOG_FILE;
+  if (!file) return EVAL_MODEL_CATALOG;
+
+  const extra = z
+    .record(z.string(), evalModelSchema)
+    .parse(JSON.parse(readFileSync(file, "utf8")));
+  return { ...EVAL_MODEL_CATALOG, ...extra };
 }
 
 export function getEmailAccountForModel(
@@ -158,9 +182,18 @@ export function getEmailAccountForModel(
     user: {
       aiProvider: model.provider,
       aiModel: model.model,
-      aiApiKey: getApiKeyForProvider(model.provider),
+      aiApiKey: getApiKeyForModel(model),
     },
   };
+}
+
+/**
+ * A null key does not fail: getModel then serves the deployment default under
+ * this model's label. Callers that compare models must verify the served model.
+ */
+export function getApiKeyForModel(model: EvalModel): string | null {
+  if (model.apiKeyEnv) return process.env[model.apiKeyEnv] || null;
+  return getApiKeyForProvider(model.provider);
 }
 
 function getApiKeyForProvider(provider: string): string | null {
@@ -172,6 +205,7 @@ function getApiKeyForProvider(provider: string): string | null {
     groq: process.env.GROQ_API_KEY,
     cerebras: process.env.CEREBRAS_API_KEY,
     [Provider.AZURE_FOUNDRY]: process.env.AZURE_FOUNDRY_API_KEY,
+    [Provider.AI_GATEWAY]: process.env.AI_GATEWAY_API_KEY,
     "openai-compatible": process.env.LLM_API_KEY || "not-required",
     ollama: "ollama-local",
   };

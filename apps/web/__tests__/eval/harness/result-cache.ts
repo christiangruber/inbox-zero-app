@@ -52,6 +52,8 @@ const FINGERPRINTED_FILES = [
   "__tests__/eval/harness/send-ready-judge-contract.ts",
   "__tests__/eval/harness/criteria-judge.ts",
   "__tests__/eval/harness/assertions.ts",
+  "utils/ai/compose/polish-draft.ts",
+  "__tests__/eval/harness/polish-draft-run.ts",
 ];
 
 /** Fields of a record that describe the run rather than its outcome. */

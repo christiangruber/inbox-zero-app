@@ -1,4 +1,3 @@
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   describeEvalMatrix,
@@ -18,9 +17,8 @@ import {
 import {
   checkSplitLock,
   formatSplitLockViolation,
-  loadSplitLock,
+  loadMergedSplitLock,
   SPLIT_LOCK_FILENAME,
-  type SplitLock,
 } from "@/__tests__/eval/harness/split-lock";
 
 // EVAL_DATA_DIRS=/path/to/inbox-zero-evals/datasets pnpm test-ai eval/suites/draft-reply-data
@@ -50,7 +48,7 @@ describe.runIf(shouldRun)("draft-reply data suite", () => {
   });
 
   it("has not edited a held-out test case since it was locked", () => {
-    const lock = mergeSplitLocks(roots);
+    const lock = loadMergedSplitLock(roots);
     const heldOut = loaded.cases.filter(
       (evalCase) => evalCase.split === "test",
     );
@@ -103,12 +101,3 @@ describe.runIf(shouldRun)("draft-reply data suite", () => {
     );
   });
 });
-
-/** Later roots override earlier ones, matching how cases themselves overlay. */
-function mergeSplitLocks(dataRoots: string[]): SplitLock {
-  const merged: SplitLock = {};
-  for (const root of dataRoots) {
-    Object.assign(merged, loadSplitLock(path.join(root, SPLIT_LOCK_FILENAME)));
-  }
-  return merged;
-}

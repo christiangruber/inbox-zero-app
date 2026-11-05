@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   isCountableCase,
@@ -41,6 +41,35 @@ export type EvalJudgeIdentity = {
   provider: string;
   model: string;
   fingerprint: string;
+};
+
+export type EvalUsageCall = {
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  /** Null when neither the provider nor the price table knows the cost. */
+  costUsd: number | null;
+};
+
+/**
+ * Runs one phase of a sample and returns the AI calls made inside it. Injected
+ * rather than imported so this runner stays free of product code; samples run
+ * concurrently, so the implementation must attribute calls by async context.
+ */
+export type EvalUsageCapture = <T>(
+  operation: () => Promise<T>,
+) => Promise<{ value: T; calls: EvalUsageCall[] }>;
+
+export type EvalUsageSummary = {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  costUsd: number;
+  unpricedCalls: number;
+  servedModels: string[];
 };
 
 export type EvalResultRecord = {
@@ -94,6 +123,12 @@ export type EvalResultRecord = {
    * soon as the run ended.
    */
   codeFingerprint: string | null;
+  /**
+   * Optional because records written before usage capture existed, and runs
+   * without a capture, have none. A cache hit carries the original run's usage.
+   */
+  candidateUsage?: EvalUsageSummary | null;
+  judgeUsage?: EvalUsageSummary | null;
 };
 
 export type EvalRun = {
@@ -182,6 +217,8 @@ export async function runEvalSuite<
   filters = readEvalFiltersFromEnv(),
   writeHistory = true,
   onRecord,
+  captureUsage,
+  expectedServedModel,
 }: {
   evalName: string;
   cases: TCase[];
@@ -214,6 +251,13 @@ export async function runEvalSuite<
   filters?: EvalFilters;
   writeHistory?: boolean;
   onRecord?: (record: EvalResultRecord) => void;
+  captureUsage?: EvalUsageCapture;
+  /**
+   * When set, a sample counts only if every candidate call was served by this
+   * model. Without a key, getModel quietly serves the deployment default under
+   * the requested label, which would make a comparison meaningless.
+   */
+  expectedServedModel?: { provider: string; model: string };
 }): Promise<EvalRun> {
   const startedAt = new Date().toISOString();
   const selected = selectEvalCases({ cases, filters });
@@ -244,6 +288,8 @@ export async function runEvalSuite<
       judgeFingerprint,
       codeFingerprint,
       environmentFingerprint,
+      captureUsage,
+      expectedServedModel,
       ...task,
     });
     onRecord?.(record);
@@ -269,20 +315,61 @@ export async function runEvalSuite<
   };
 
   if (writeHistory) run.historyPath = writeRunHistory(run);
+  appendRunLog(run);
   return run;
 }
 
-export function writeRunHistory(run: EvalRun): string {
-  const dir = path.join(
-    process.cwd(),
-    ".context",
-    "eval-results",
+/** Honours EVAL_HISTORY_DIR like the vitest reporter, including `off`. */
+export function writeRunHistory(run: EvalRun): string | null {
+  const configured = process.env.EVAL_HISTORY_DIR?.trim();
+  if (configured === "off") return null;
+
+  const dir = path.resolve(
+    configured || path.join(process.cwd(), ".context", "eval-results"),
     run.evalName,
   );
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${run.startedAt.replace(/[:.]/g, "-")}.json`);
   writeFileSync(file, `${JSON.stringify(run, null, 2)}\n`);
   return file;
+}
+
+/**
+ * A processing log for runs over private data: what was sent where and when,
+ * never what it said. Kept apart from run history, which holds full outputs.
+ */
+function appendRunLog(run: EvalRun) {
+  const logFile = process.env.EVAL_RUN_LOG?.trim();
+  if (!logFile) return;
+
+  const entry = {
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    evalName: run.evalName,
+    model: run.model,
+    variantId: run.variantId,
+    split: run.filters.split,
+    caseIds: [...new Set(run.records.map((record) => record.caseId))],
+    samples: run.records.length,
+    servedModels: [
+      ...new Set(
+        run.records.flatMap(
+          (record) => record.candidateUsage?.servedModels ?? [],
+        ),
+      ),
+    ],
+    judgeProvider: run.judgeProvider,
+    judgeModel: run.judgeModel,
+    dataRoots: [
+      ...new Set(
+        run.records
+          .map((record) => record.sourceRoot)
+          .filter((root) => root !== null),
+      ),
+    ],
+  };
+  mkdirSync(path.dirname(path.resolve(logFile)), { recursive: true });
+  appendFileSync(logFile, `${JSON.stringify(entry)}\n`);
 }
 
 async function runOne<
@@ -305,6 +392,8 @@ async function runOne<
   judgeFingerprint,
   codeFingerprint,
   environmentFingerprint,
+  captureUsage = withoutUsageCapture,
+  expectedServedModel,
 }: {
   evalName: string;
   evalCase: TCase;
@@ -330,6 +419,8 @@ async function runOne<
     signal: AbortSignal;
   }) => Promise<EvalJudgeOutcome>;
   describeOutput?: (output: TOutput) => string;
+  captureUsage?: EvalUsageCapture;
+  expectedServedModel?: { provider: string; model: string };
 }): Promise<EvalResultRecord> {
   const startedAt = Date.now();
   const caseFingerprint = caseFingerprintOf?.(evalCase) ?? null;
@@ -374,18 +465,47 @@ async function runOne<
   const signal = AbortSignal.timeout(timeoutMs);
 
   try {
-    const output = await race(
-      invoke({ evalCase, sampleIndex, signal }),
+    const invoked = await race(
+      captureUsage(() => invoke({ evalCase, sampleIndex, signal })),
       signal,
     );
+    const output = invoked.value;
+    const candidateUsage = summarizeUsage(invoked.calls);
+
+    const routingError = expectedServedModel
+      ? checkServedModel(expectedServedModel, invoked.calls)
+      : null;
+    if (routingError) {
+      return {
+        ...base,
+        pass: false,
+        sendReady: null,
+        usability: null,
+        primaryIssue: null,
+        severity: null,
+        confidence: null,
+        assertionFailures: [],
+        criteriaFailures: [],
+        durationMs: Date.now() - startedAt,
+        judgeReasoning: null,
+        actual: describeOutput ? describeOutput(output) : null,
+        error: routingError,
+        candidateUsage,
+        judgeUsage: null,
+      };
+    }
 
     const assertionFailures = (assert?.({ evalCase, output }) ?? [])
       .filter((outcome) => !outcome.pass)
       .map((outcome) => `${outcome.name}: ${outcome.detail}`);
 
-    const verdict = judge
-      ? await race(judge({ evalCase, output, signal }), signal)
+    const judged = judge
+      ? await race(
+          captureUsage(() => judge({ evalCase, output, signal })),
+          signal,
+        )
       : null;
+    const verdict = judged?.value ?? null;
     const criteriaFailures = verdict?.criteriaFailures ?? [];
 
     const record: EvalResultRecord = {
@@ -405,6 +525,8 @@ async function runOne<
       judgeReasoning: verdict?.reasoning ?? null,
       actual: describeOutput ? describeOutput(output) : null,
       error: null,
+      candidateUsage,
+      judgeUsage: judged ? summarizeUsage(judged.calls) : null,
     };
 
     if (cacheKey) writeCachedRecord(cacheKey, record);
@@ -429,6 +551,51 @@ async function runOne<
       error: timedOut ? "timeout" : errorMessage(error),
     };
   }
+}
+
+async function withoutUsageCapture<T>(operation: () => Promise<T>) {
+  return { value: await operation(), calls: [] };
+}
+
+function summarizeUsage(calls: EvalUsageCall[]): EvalUsageSummary | null {
+  if (calls.length === 0) return null;
+
+  return {
+    calls: calls.length,
+    inputTokens: sumOf(calls, (call) => call.inputTokens),
+    outputTokens: sumOf(calls, (call) => call.outputTokens),
+    reasoningTokens: sumOf(calls, (call) => call.reasoningTokens),
+    costUsd: sumOf(calls, (call) => call.costUsd ?? 0),
+    unpricedCalls: calls.filter((call) => call.costUsd === null).length,
+    servedModels: [...new Set(calls.map(servedModelId))],
+  };
+}
+
+function checkServedModel(
+  expected: { provider: string; model: string },
+  calls: EvalUsageCall[],
+): string | null {
+  if (calls.length === 0) {
+    return "served_model_unverified: no AI call was recorded for this sample";
+  }
+
+  const wrong = calls.filter(
+    (call) =>
+      call.provider !== expected.provider || call.model !== expected.model,
+  );
+  if (wrong.length === 0) return null;
+
+  return `served_model_mismatch: expected ${servedModelId(expected)}, got ${[
+    ...new Set(wrong.map(servedModelId)),
+  ].join(", ")}`;
+}
+
+function servedModelId(call: { provider: string; model: string }): string {
+  return `${call.provider}:${call.model}`;
+}
+
+function sumOf<T>(items: T[], value: (item: T) => number): number {
+  return items.reduce((total, item) => total + value(item), 0);
 }
 
 async function mapWithConcurrency<T, R>(

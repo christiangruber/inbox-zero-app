@@ -1,6 +1,7 @@
 import { describe } from "vitest";
 import {
   EVAL_MODEL_CATALOG,
+  getApiKeyForModel,
   getEmailAccountForModel,
   getEvalModels,
   type EvalModel,
@@ -13,7 +14,11 @@ export function shouldRunEvalTests(): boolean {
 
   const models = getEvalModels();
   if (models.length > 0) {
-    return models.every((model) => hasConfiguredProvider(model.provider));
+    return models.every((model) =>
+      model.apiKeyEnv
+        ? Boolean(getApiKeyForModel(model))
+        : hasConfiguredProvider(model.provider),
+    );
   }
 
   const defaultProvider = getDefaultEvalProvider();

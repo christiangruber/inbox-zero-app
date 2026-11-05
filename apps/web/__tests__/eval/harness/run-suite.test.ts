@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -8,6 +8,8 @@ import {
   readEvalFiltersFromEnv,
   runEvalSuite,
   selectEvalCases,
+  type EvalUsageCall,
+  type EvalUsageCapture,
 } from "@/__tests__/eval/harness/run-suite";
 
 function makeCase(overrides: Partial<EvalCaseEnvelope> = {}): EvalCaseEnvelope {
@@ -309,4 +311,162 @@ it("invalidates changed evidence without changing comparison case identity", asy
     vi.unstubAllEnvs();
     rmSync(cacheDir, { recursive: true, force: true });
   }
+});
+
+describe("run records for model comparisons", () => {
+  const call = (provider: string, model: string): EvalUsageCall => ({
+    provider,
+    model,
+    inputTokens: 100,
+    outputTokens: 20,
+    reasoningTokens: 5,
+    costUsd: 0.001,
+  });
+
+  function captureFrom(phases: EvalUsageCall[][]): EvalUsageCapture {
+    let index = 0;
+    return async (operation) => {
+      const calls = phases[index++] ?? [];
+      return { value: await operation(), calls };
+    };
+  }
+
+  it("records candidate and judge usage separately", async () => {
+    const run = await runEvalSuite({
+      evalName: "usage",
+      model: "gateway-sonnet",
+      writeHistory: false,
+      filters: noFilters,
+      cases: [makeCase({ id: "a" })],
+      invoke: async () => "reply",
+      judge: async () => ({
+        sendReady: true,
+        usability: "send-ready",
+        primaryIssue: null,
+        severity: null,
+        reasoning: "ok",
+      }),
+      captureUsage: captureFrom([
+        [call("aigateway", "anthropic/claude-sonnet-5.5")],
+        [call("openrouter", "judge-model"), call("openrouter", "judge-model")],
+      ]),
+      expectedServedModel: {
+        provider: "aigateway",
+        model: "anthropic/claude-sonnet-5.5",
+      },
+    });
+
+    const [record] = run.records;
+    expect(record?.pass).toBe(true);
+    expect(record?.candidateUsage).toEqual({
+      calls: 1,
+      inputTokens: 100,
+      outputTokens: 20,
+      reasoningTokens: 5,
+      costUsd: 0.001,
+      unpricedCalls: 0,
+      servedModels: ["aigateway:anthropic/claude-sonnet-5.5"],
+    });
+    expect(record?.judgeUsage?.calls).toBe(2);
+  });
+
+  it("fails a sample served by a different model than requested, without judging it", async () => {
+    const judge = vi.fn();
+    const run = await runEvalSuite({
+      evalName: "usage",
+      model: "gateway-sonnet",
+      writeHistory: false,
+      filters: noFilters,
+      cases: [makeCase({ id: "a" })],
+      invoke: async () => "reply",
+      judge,
+      captureUsage: captureFrom([[call("openrouter", "openai/gpt-6-luna")]]),
+      expectedServedModel: {
+        provider: "aigateway",
+        model: "anthropic/claude-sonnet-5.5",
+      },
+    });
+
+    const [record] = run.records;
+    expect(record?.pass).toBe(false);
+    expect(record?.error).toContain("served_model_mismatch");
+    expect(record?.error).toContain("openrouter:openai/gpt-6-luna");
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it("fails a sample whose served model cannot be verified", async () => {
+    const run = await runEvalSuite({
+      evalName: "usage",
+      model: "gateway-sonnet",
+      writeHistory: false,
+      filters: noFilters,
+      cases: [makeCase({ id: "a" })],
+      invoke: async () => "reply",
+      captureUsage: captureFrom([[]]),
+      expectedServedModel: {
+        provider: "aigateway",
+        model: "anthropic/claude-sonnet-5.5",
+      },
+    });
+
+    expect(run.records[0]?.pass).toBe(false);
+    expect(run.records[0]?.error).toContain("served_model_unverified");
+  });
+
+  it("writes history to EVAL_HISTORY_DIR and nowhere when it is off", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "eval-history-"));
+    const runOnce = () =>
+      runEvalSuite({
+        evalName: "history",
+        model: "m",
+        filters: noFilters,
+        cases: [makeCase({ id: "a" })],
+        invoke: async () => "reply",
+      });
+    try {
+      vi.stubEnv("EVAL_HISTORY_DIR", dir);
+      const written = await runOnce();
+      expect(written.historyPath?.startsWith(path.join(dir, "history"))).toBe(
+        true,
+      );
+      expect(existsSync(written.historyPath ?? "")).toBe(true);
+
+      vi.stubEnv("EVAL_HISTORY_DIR", "off");
+      expect((await runOnce()).historyPath).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("appends a content-free line to EVAL_RUN_LOG", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "eval-run-log-"));
+    const logFile = path.join(dir, "runs.jsonl");
+    try {
+      vi.stubEnv("EVAL_RUN_LOG", logFile);
+      await runEvalSuite({
+        evalName: "log",
+        model: "gateway-sonnet",
+        writeHistory: false,
+        filters: noFilters,
+        cases: [makeCase({ id: "case-x" })],
+        invoke: async () => "a private reply about Frau Beispiel",
+        describeOutput: (output) => output,
+      });
+
+      const lines = readFileSync(logFile, "utf8").trim().split("\n");
+      expect(lines).toHaveLength(1);
+      const entry = JSON.parse(lines[0] ?? "{}");
+      expect(entry).toMatchObject({
+        evalName: "log",
+        model: "gateway-sonnet",
+        caseIds: ["case-x"],
+        samples: 1,
+      });
+      expect(lines[0]).not.toContain("Beispiel");
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
