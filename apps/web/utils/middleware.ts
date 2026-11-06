@@ -99,6 +99,8 @@ function withMiddleware<T extends NextRequest>(
           })
         : undefined;
 
+    if (env.ENABLE_DEBUG_LOGS) baseLogger.info("API request");
+
     const reqWithLogger = req as NextRequest & { logger?: Logger };
     reqWithLogger.logger = baseLogger;
     let requestForError = reqWithLogger as NextRequest;

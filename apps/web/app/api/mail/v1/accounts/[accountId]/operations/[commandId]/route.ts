@@ -19,6 +19,10 @@ import {
   cancelHeldEngineSend,
   createEmailProviderOperationExecutor,
 } from "@/utils/mail-api/operations";
+import {
+  HYDRATION_COST_PER_MESSAGE,
+  takeBackgroundSyncBudget,
+} from "@/utils/mail-api/sync-budget";
 
 export const PUT = withEmailProvider(
   "mail/v1/operations",
@@ -65,6 +69,12 @@ export const PUT = withEmailProvider(
         { status: 400 },
       );
     }
+    const intent = parsed.data.operation.intent;
+    request.logger.trace("Executing mail operation", {
+      kind: intent.kind,
+      targetCount: intent.kind === "metadata" ? intent.targets.length : 1,
+      change: intent.kind === "metadata" ? intent.change : undefined,
+    });
     const executor = createEmailProviderOperationExecutor({
       provider: request.emailProvider,
       accountId: request.auth.emailAccountId,
@@ -125,6 +135,31 @@ const inspectOperation = withEmailProvider(
           receiptId: params.commandId,
         }),
       );
+    }
+    // Inspecting re-reads every target, and the client keeps inspecting while
+    // any target is unconfirmed, so a large operation can eat the provider's
+    // whole quota. Pace it with the rest of the background work.
+    const inspectIntent = parsed.data.operation.intent;
+    if (inspectIntent.kind === "metadata") {
+      request.logger.trace("Inspecting mail operation", {
+        targetCount: inspectIntent.targets.length,
+        change: inspectIntent.change,
+      });
+      const budget = await takeBackgroundSyncBudget(
+        request.auth.emailAccountId,
+        inspectIntent.targets.length * HYDRATION_COST_PER_MESSAGE,
+      );
+      if (!budget.ok) {
+        return NextResponse.json(
+          operationAdmitResultSchema.parse({
+            status: "accepted",
+            protocolVersion: parsed.data.protocolVersion,
+            requestId,
+            receiptId: parsed.data.receiptId ?? params.commandId,
+            retryAfterMs: Math.ceil(budget.retryAfterMs),
+          }),
+        );
+      }
     }
     const executor = createEmailProviderOperationExecutor({
       provider: request.emailProvider,

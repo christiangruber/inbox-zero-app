@@ -31,6 +31,7 @@ import { convertEmailHtmlToText } from "@/utils/mail";
 // Outlook allows four concurrent Graph requests per mailbox, shared with
 // webhook processing, so batched folder reads stay below that.
 const CHANGES_BATCH_CONCURRENCY = 3;
+const HYDRATE_CONCURRENCY = 5;
 
 const SUPPORTED_CHANGES = [
   "archive",
@@ -245,15 +246,29 @@ export function createEmailProviderMailboxSource(input: {
     },
     async hydrate({ keys, purpose }) {
       try {
-        const messages = [];
-        const unresolved = [];
-        for (const key of keys) {
-          try {
-            messages.push(await provider.getMessage(key.messageId));
-          } catch (error) {
-            if (!isMissingProviderResource(error)) throw error;
-            unresolved.push({ key, reason: "not_found" as const });
-          }
+        const messages: ParsedMessage[] = [];
+        const unresolved: {
+          key: (typeof keys)[number];
+          reason: "not_found";
+        }[] = [];
+        // The client runs one job at a time, so a slow background batch makes
+        // an email the user just opened wait behind it. Fetching a few at once
+        // keeps a 50-message batch to a couple of seconds.
+        const results = await mapWithConcurrency(
+          keys,
+          HYDRATE_CONCURRENCY,
+          async (key) => {
+            try {
+              return { key, message: await provider.getMessage(key.messageId) };
+            } catch (error) {
+              if (!isMissingProviderResource(error)) throw error;
+              return { key, message: null };
+            }
+          },
+        );
+        for (const { key, message } of results) {
+          if (message) messages.push(message);
+          else unresolved.push({ key, reason: "not_found" });
         }
         const changes: ProviderChange[] = [];
         const bodies: BodyObservation[] = [];

@@ -1,4 +1,5 @@
 import type { ProviderMailboxSearch } from "@/utils/email/types";
+import PQueue from "p-queue";
 import { getCompleteGmailThread } from "@/utils/gmail/thread";
 import type { LocalMailSyncRequest } from "@/utils/actions/local-mail-sync.validation";
 import type { LocalMailSyncResponse } from "@/utils/email/local-mail-sync-types";
@@ -143,6 +144,7 @@ import { requireSentMessageId } from "@/utils/email/sent-message-id";
 import { getGmailMailboxSyncPage } from "@/utils/gmail/mailbox-sync";
 import { isGoogleOauthEmulationEnabled } from "@/utils/gmail/oauth";
 
+const PAGE_MESSAGE_CONCURRENCY = 5;
 const GMAIL_MESSAGE_WRITE_CONCURRENCY = 5;
 const SENDER_ARCHIVE_PAGE_SIZE = 500;
 
@@ -1461,12 +1463,15 @@ export class GmailProvider implements EmailProvider {
     });
 
     const messages = response.messages || [];
-    const messagePromises = messages.map((message) =>
-      this.getMessage(message.id!),
+    // Gmail meters each user per second as well as per minute, so a page of
+    // 50 parallel gets trips the limit and every retry keeps it tripped.
+    const queue = new PQueue({ concurrency: PAGE_MESSAGE_CONCURRENCY });
+    const fetched = await Promise.all(
+      messages.map((message) => queue.add(() => this.getMessage(message.id!))),
     );
 
     return {
-      messages: await Promise.all(messagePromises),
+      messages: fetched,
       nextPageToken: response.nextPageToken || undefined,
     };
   }
@@ -1510,12 +1515,15 @@ export class GmailProvider implements EmailProvider {
     });
 
     const messages = response.messages || [];
-    const messagePromises = messages.map((message) =>
-      this.getMessage(message.id!),
+    // Gmail meters each user per second as well as per minute, so a page of
+    // 50 parallel gets trips the limit and every retry keeps it tripped.
+    const queue = new PQueue({ concurrency: PAGE_MESSAGE_CONCURRENCY });
+    const fetched = await Promise.all(
+      messages.map((message) => queue.add(() => this.getMessage(message.id!))),
     );
 
     return {
-      messages: await Promise.all(messagePromises),
+      messages: fetched,
       nextPageToken: response.nextPageToken || undefined,
     };
   }

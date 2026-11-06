@@ -51,6 +51,10 @@ import {
   saveLearnedPattern,
 } from "@/utils/rule/learned-patterns";
 import { internalDateToDate } from "@/utils/date";
+import {
+  createAssistantActivityTracker,
+  type AssistantActivityTracker,
+} from "@/utils/assistant-activity/progress";
 import { ConditionType } from "@/utils/config";
 import type { Logger } from "@/utils/logger";
 import {
@@ -88,17 +92,7 @@ export type RunRulesResult = {
   createdAt: Date;
 };
 
-export async function runRules({
-  provider,
-  message,
-  rules,
-  emailAccount,
-  isTest,
-  modelType,
-  logger,
-  skipArchive,
-  skipDraftReplies,
-}: {
+type RunRulesOptions = {
   provider: EmailProvider;
   message: ParsedMessage;
   rules: RuleWithActions[];
@@ -108,10 +102,48 @@ export async function runRules({
   logger: Logger;
   skipArchive?: boolean;
   skipDraftReplies?: boolean;
-}): Promise<RunRulesResult[]> {
+};
+
+export async function runRules(
+  options: RunRulesOptions,
+): Promise<RunRulesResult[]> {
+  const activity = createAssistantActivityTracker({
+    emailAccountId: options.emailAccount.id,
+    messageId: options.message.id,
+    threadId: options.message.threadId,
+    enabled: !options.isTest,
+    logger: options.logger,
+  });
+  try {
+    return await runRulesWithActivity(options, activity);
+  } catch (error) {
+    await activity.finish("failed");
+    throw error;
+  }
+}
+
+async function runRulesWithActivity(
+  {
+    provider,
+    message,
+    rules,
+    emailAccount,
+    isTest,
+    modelType,
+    logger,
+    skipArchive,
+    skipDraftReplies,
+  }: RunRulesOptions,
+  activity: AssistantActivityTracker,
+): Promise<RunRulesResult[]> {
   const batchTimestamp = new Date(); // Single timestamp for this batch execution
   const { regularRules, conversationRules } = prepareRulesWithMetaRule(rules);
 
+  await activity.start(
+    "rules",
+    "Matching this email against your rules…",
+    "Rules",
+  );
   const results = await findMatchingRules({
     rules: regularRules,
     message,
@@ -119,6 +151,16 @@ export async function runRules({
     provider,
     modelType,
     logger,
+  });
+  const matchedRuleNames = results.matches
+    .filter((match) => !isConversationRule(match.rule.id))
+    .map((match) => match.rule.name);
+  await activity.done("rules", {
+    tags: matchedRuleNames.length
+      ? matchedRuleNames
+      : results.matches.length
+        ? ["Conversation"]
+        : ["No rule"],
   });
 
   const calendarAwareMatches = ensureConversationRuleForAiCalendarMatch({
@@ -158,15 +200,28 @@ export async function runRules({
   }));
 
   let skippedConversationReason: string | undefined;
+  let decidedStatus: string | undefined;
 
   if (conversationMatch) {
-    const { rule, reason } = await determineConversationStatus({
+    await activity.start(
+      "decision",
+      "Deciding if you owe a reply…",
+      "Decision",
+    );
+    const { rule, reason, decision } = await determineConversationStatus({
       conversationRules,
       message,
       emailAccount,
       provider,
       modelType,
       isTest,
+    });
+    decidedStatus = decision?.status;
+    await activity.done("decision", {
+      tags: decision ? [CONVERSATION_STATUS_LABELS[decision.status]] : [],
+      note: decision
+        ? describeDecision(decision.decidedBy, decision.confidence)
+        : reason,
     });
     if (rule) {
       matchesWithFlags.push({
@@ -211,6 +266,7 @@ export async function runRules({
         { logger },
       );
     }
+    await activity.finish(decidedStatus ? "no-reply" : "sorted");
 
     return [
       {
@@ -225,6 +281,7 @@ export async function runRules({
 
   const executedRules: RunRulesResult[] = [];
   const queuedSenderPatternAnalyses = new Set<string>();
+  let wroteDraft = false;
 
   for (const result of finalMatches) {
     const ruleToExecute = result.rule;
@@ -242,6 +299,20 @@ export async function runRules({
       });
     }
 
+    const draftsReply =
+      !skipDraftReplies &&
+      ruleToExecute.actions.some((action) =>
+        isDraftReplyActionType(action.type),
+      );
+    if (draftsReply) {
+      wroteDraft = true;
+      await activity.start(
+        "draft",
+        "Writing the reply in your voice…",
+        "Draft",
+      );
+    }
+
     const executedRule = await executeMatchedRule(
       ruleToExecute,
       message,
@@ -256,6 +327,7 @@ export async function runRules({
       skipArchive,
       skipDraftReplies,
     );
+    if (draftsReply) await activity.done("draft");
 
     executedRules.push({
       ...executedRule,
@@ -267,7 +339,31 @@ export async function runRules({
     });
   }
 
+  await activity.finish(
+    wroteDraft
+      ? "draft"
+      : decidedStatus && decidedStatus !== SystemType.TO_REPLY
+        ? "no-reply"
+        : "sorted",
+  );
   return executedRules;
+}
+
+const CONVERSATION_STATUS_LABELS: Record<string, string> = {
+  [SystemType.TO_REPLY]: "To Reply",
+  [SystemType.AWAITING_REPLY]: "Awaiting Reply",
+  [SystemType.FYI]: "FYI",
+  [SystemType.ACTIONED]: "Actioned",
+};
+
+function describeDecision(
+  decidedBy: "decision-model" | "llm",
+  confidence: number | undefined,
+) {
+  if (decidedBy === "llm") return "decided by the language model";
+  const sure =
+    confidence === undefined ? "" : ` · ${Math.round(confidence * 100)}% sure`;
+  return `decided by Jev${sure}`;
 }
 
 function prepareRulesWithMetaRule(rules: RuleWithActions[]): {

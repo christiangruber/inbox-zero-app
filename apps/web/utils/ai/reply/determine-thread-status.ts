@@ -101,7 +101,7 @@ export async function aiDetermineThreadStatus({
   modelType?: ModelType;
   userSentLastEmail?: boolean;
   conversationRules?: RuleWithActions[];
-}): Promise<{ status: ConversationStatus; rationale: string }> {
+}): Promise<ThreadStatusResult> {
   // If the user sent the last email, FYI is not an option: from their
   // perspective they already know what they sent.
   const statuses = userSentLastEmail
@@ -149,7 +149,7 @@ export async function determineThreadStatusWithLlm({
   modelType?: ModelType;
   userSentLastEmail: boolean;
   definitions: { systemType: ConversationStatus; instructions: string }[];
-}): Promise<{ status: ConversationStatus; rationale: string }> {
+}): Promise<ThreadStatusResult> {
   const statuses = definitions.map((definition) => definition.systemType);
 
   const system = buildThreadStatusSystemPrompt({
@@ -191,5 +191,13 @@ Based on the full thread context above, determine the current status of this thr
     schema,
   });
 
-  return aiResponse.object;
+  return { ...aiResponse.object, decidedBy: "llm" };
 }
+
+export type ThreadStatusResult = {
+  status: ConversationStatus;
+  rationale: string;
+  decidedBy: "decision-model" | "llm";
+  /** Only the decision model reports how sure it is. */
+  confidence?: number;
+};

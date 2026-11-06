@@ -1,6 +1,7 @@
 import type { ConversationStatus } from "@/utils/reply-tracker/conversation-status-config";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import type { Logger } from "@/utils/logger";
+import type { ThreadStatusResult } from "@/utils/ai/reply/determine-thread-status";
 import type { EmailForLLM } from "@/utils/types";
 import { getDecisionEmailState } from "./email-state";
 import { type DecisionModelConfig, runDecisionModel } from "./decision-model";
@@ -23,7 +24,7 @@ export async function decideThreadStatus({
   threadMessages: EmailForLLM[];
   userSentLastEmail: boolean;
   logger: Logger;
-}): Promise<{ status: ConversationStatus; rationale: string }> {
+}): Promise<ThreadStatusResult> {
   const statuses = definitions.map((definition) => definition.systemType);
   const response = await runDecisionModel({
     config,
@@ -77,5 +78,7 @@ export async function decideThreadStatus({
   return {
     status: answer.choice as ConversationStatus,
     rationale: `Decision model chose ${answer.choice} with ${Math.round(answer.confidence * 100)}% confidence.`,
+    decidedBy: "decision-model",
+    confidence: answer.confidence,
   };
 }

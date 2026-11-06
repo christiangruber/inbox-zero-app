@@ -239,7 +239,7 @@ const SHORTCUT_DEFINITIONS = [
   },
   {
     id: "star",
-    keys: ["s"],
+    keys: ["h"],
     scope: "mail",
     group: "Triage",
     label: "Star / unstar",
@@ -281,7 +281,7 @@ const SHORTCUT_DEFINITIONS = [
   },
   {
     id: "snooze",
-    keys: ["h"],
+    keys: ["s"],
     scope: "mail",
     group: "Triage",
     label: "Snooze",

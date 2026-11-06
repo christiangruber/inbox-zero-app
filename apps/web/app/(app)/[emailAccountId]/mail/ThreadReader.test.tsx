@@ -7,6 +7,9 @@ import { ThreadReader } from "@/app/(app)/[emailAccountId]/mail/ThreadReader";
 import type { ThreadMessage } from "@/components/email-list/types";
 import { hideSendingDraftMessages } from "@/hooks/useHiddenDraftMessageIds";
 
+vi.mock("@/app/(app)/[emailAccountId]/mail/AssistantActivity", () => ({
+  AssistantActivity: () => null,
+}));
 vi.mock("@/env", () => ({
   env: { NEXT_PUBLIC_SUPPORT_EMAIL: "support@example.com" },
 }));

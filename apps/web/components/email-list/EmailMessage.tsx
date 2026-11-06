@@ -67,6 +67,7 @@ export function EmailMessage({
   bodyAvailable = true,
   missingBodyIds,
   menu,
+  footer,
   refetch,
   showReplyButton,
   defaultComposeMode,
@@ -97,6 +98,7 @@ export function EmailMessage({
   bodyAvailable?: boolean;
   missingBodyIds?: Set<string>;
   menu?: React.ReactNode;
+  footer?: React.ReactNode;
   draftMessages?: ThreadMessage[];
   refetch: () => void;
   showReplyButton: boolean;
@@ -427,6 +429,8 @@ export function EmailMessage({
             ))}
 
           {message.attachments && <EmailAttachments message={message} />}
+
+          {footer}
 
           {shownDrafts.map(({ message: draft, sessionMessageId }, index) => (
             <ReplyPanel

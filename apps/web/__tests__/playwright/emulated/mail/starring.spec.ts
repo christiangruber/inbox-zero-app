@@ -19,7 +19,7 @@ test("toggles stars with shortcuts, the palette and the list toolbar while prese
   const starStatus = row.getByText("Starred conversation", { exact: true });
   if (await starStatus.count()) {
     await row.getByRole("checkbox").click();
-    await page.keyboard.press("s");
+    await page.keyboard.press("h");
     await expect(starStatus).toHaveCount(0);
     await expectCompletedStarMutation(page, emailAccountId, false);
   }
@@ -29,7 +29,7 @@ test("toggles stars with shortcuts, the palette and the list toolbar while prese
   await page.getByRole("button", { name: "Unread", exact: true }).click();
   await expect(row).toBeVisible();
   await row.getByRole("checkbox").click();
-  await page.keyboard.press("s");
+  await page.keyboard.press("h");
   await expect(
     row.getByText("Starred conversation", { exact: true }),
   ).toHaveCount(1);
@@ -104,11 +104,11 @@ test("toggles stars with shortcuts, the palette and the list toolbar while prese
     exact: true,
   });
   await expect(readerStarStatus).toHaveCount(0);
-  await page.keyboard.press("s");
+  await page.keyboard.press("h");
   await expect(readerStarStatus).toBeVisible();
   await expectCompletedStarMutation(page, emailAccountId, true);
   await capturePlaywrightCheckpoint(page, testInfo, "starred-reader-subject");
-  await page.keyboard.press("s");
+  await page.keyboard.press("h");
   await expect(readerStarStatus).toHaveCount(0);
   await expectCompletedStarMutation(page, emailAccountId, false);
 

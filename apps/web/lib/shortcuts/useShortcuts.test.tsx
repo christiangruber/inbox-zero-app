@@ -38,7 +38,7 @@ describe("useShortcuts", () => {
       startTransition(() => rerender(view(pendingHandler, true)));
     });
     expect(screen.getByText("Visible conversation")).toBeTruthy();
-    press({ key: "s", code: "KeyS" });
+    press({ key: "h", code: "KeyH" });
     expect(visibleHandler).toHaveBeenCalledOnce();
     expect(pendingHandler).not.toHaveBeenCalled();
   });
@@ -49,7 +49,7 @@ describe("useShortcuts", () => {
     renderShortcuts({ archive, snooze });
 
     press({ key: "e", code: "KeyE" });
-    press({ key: "h", code: "KeyH" });
+    press({ key: "s", code: "KeyS" });
 
     expect(archive).toHaveBeenCalledOnce();
     expect(snooze).toHaveBeenCalledOnce();

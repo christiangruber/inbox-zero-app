@@ -37,6 +37,14 @@ import { isDraftReplyActionType } from "@/utils/actions/draft-reply";
 const logger = createTestLogger();
 
 vi.mock("@/utils/prisma");
+vi.mock("@/utils/assistant-activity/progress", () => ({
+  createAssistantActivityTracker: () => ({
+    start: vi.fn(),
+    done: vi.fn(),
+    fail: vi.fn(),
+    finish: vi.fn(),
+  }),
+}));
 vi.mock("@/utils/ai/choose-rule/match-rules", () => ({
   findMatchingRules: vi.fn(),
 }));

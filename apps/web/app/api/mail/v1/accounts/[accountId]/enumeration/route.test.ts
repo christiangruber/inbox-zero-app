@@ -5,6 +5,10 @@ import { createScopedLogger } from "@/utils/logger";
 import { POST } from "./route";
 
 vi.mock("server-only", () => ({}));
+vi.mock("@/utils/mail-api/sync-budget", () => ({
+  ENUMERATION_PAGE_COST: 260,
+  takeBackgroundSyncBudget: vi.fn().mockResolvedValue({ ok: true }),
+}));
 
 const getMessagesWithPagination = vi.fn();
 

@@ -56,6 +56,7 @@ export function EmailThread({
   withHeader,
   renderToolbar,
   renderMessageMenu,
+  renderMessageFooter,
   enableMessageNavigation = false,
 }: {
   messages: ThreadMessage[];
@@ -81,6 +82,8 @@ export function EmailThread({
   withHeader?: boolean;
   enableMessageNavigation?: boolean;
   renderMessageMenu?: (message: ThreadMessage) => ReactNode;
+  /** Shown inside an expanded message card, below its body and attachments. */
+  renderMessageFooter?: (message: ThreadMessage) => ReactNode;
   renderToolbar?: (controls: {
     allExpanded: boolean;
     canExpand: boolean;
@@ -486,6 +489,7 @@ export function EmailThread({
                 key={`${sendOperationId ?? getDraftSessionMessageId(emailAccountId, message.id)}:${recoveredReply?.messageId === message.id ? recoveredReply.version : 0}`}
                 message={message}
                 menu={renderMessageMenu?.(message)}
+                footer={renderMessageFooter?.(message)}
                 replyAnchor={outgoing ? replyAnchor : undefined}
                 composerSessionMessageId={
                   sendOperationId ? `outgoing:${sendOperationId}` : undefined

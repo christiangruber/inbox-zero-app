@@ -58,6 +58,11 @@ import type {
 } from "@/utils/mail-engine/reply-drafts";
 import type { SendEmailBody } from "@/utils/types/mail";
 import { cn } from "@/utils";
+import {
+  useWriteWithAi,
+  WriteWithAiButton,
+  WriteWithAiProgress,
+} from "@/app/(app)/[emailAccountId]/compose/WriteWithAi";
 import type { ComposeRecipientField } from "./compose-recipients";
 import { DeliveryOptions, type DeliveryOptionsHandle } from "./DeliveryOptions";
 import { resolveRemoteImages } from "./resolve-remote-images";
@@ -355,6 +360,11 @@ function ComposeEmailFormContent({
   const focusRecipientField = draftMode === "forward" || !replyingToEmail;
   const isMountedRef = useRef(true);
   const editorRef = useRef<EmailEditorHandle>(null);
+  const writeWithAi = useWriteWithAi({
+    emailAccountId: selectedEmailAccountId,
+    threadId: draftMode === "forward" ? undefined : replyingToEmail?.threadId,
+    insertHtml: (html) => editorRef.current?.insertHtml(html) ?? false,
+  });
   const formRef = useRef<HTMLFormElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const inlineImageInputRef = useRef<HTMLInputElement>(null);
@@ -641,6 +651,9 @@ function ComposeEmailFormContent({
         popOutButton={popOutButton}
       />
 
+      {writeWithAi.writing !== null && (
+        <WriteWithAiProgress startedAt={writeWithAi.writing} />
+      )}
       <EmailEditor
         placeholder={isInlineReply ? "" : undefined}
         appearance={isComposeWindow || isInlineReply ? "seamless" : "contained"}
@@ -715,6 +728,13 @@ function ComposeEmailFormContent({
               onSendAtChange={handleSendAtChange}
               onRemindAtChange={handleRemindAtChange}
               shortcutOwnerId={shortcutOwnerId}
+            />
+          )}
+          {writeWithAi.available && (
+            <WriteWithAiButton
+              writing={writeWithAi.writing}
+              disabled={isSubmitting || !editorReady}
+              onClick={writeWithAi.write}
             />
           )}
         </div>

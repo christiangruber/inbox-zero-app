@@ -13,6 +13,11 @@ import {
   unsupportedVersionResponse,
 } from "@/utils/mail-api/authorization";
 import { createEmailProviderMailboxSource } from "@/utils/mail-api/source";
+import {
+  HYDRATION_COST_PER_MESSAGE,
+  isBackgroundHydration,
+  takeBackgroundSyncBudget,
+} from "@/utils/mail-api/sync-budget";
 
 export const POST = withEmailProvider(
   "mail/v1/hydration",
@@ -41,6 +46,27 @@ export const POST = withEmailProvider(
       requestId,
     );
     if (bodyMismatch) return bodyMismatch;
+    if (
+      isBackgroundHydration({
+        purpose: parsed.data.purpose,
+        keyCount: parsed.data.keys.length,
+      })
+    ) {
+      const budget = await takeBackgroundSyncBudget(
+        request.auth.emailAccountId,
+        parsed.data.keys.length * HYDRATION_COST_PER_MESSAGE,
+      );
+      if (!budget.ok) {
+        return sourceFailureResponse(
+          {
+            status: "paused",
+            reason: "throttled",
+            retryAfterMs: budget.retryAfterMs,
+          },
+          requestId,
+        );
+      }
+    }
     const source = createEmailProviderMailboxSource({
       provider: request.emailProvider,
       accountId: request.auth.emailAccountId,

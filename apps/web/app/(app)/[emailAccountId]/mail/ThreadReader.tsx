@@ -10,6 +10,7 @@ import dynamic from "next/dynamic";
 import { AlertCircleIcon, Loader2Icon, MailIcon } from "lucide-react";
 import { latestShownMessage } from "@/app/(app)/[emailAccountId]/mail/latest-shown-message";
 import { ReaderToolbar } from "@/app/(app)/[emailAccountId]/mail/ReaderToolbar";
+import { AssistantActivity } from "@/app/(app)/[emailAccountId]/mail/AssistantActivity";
 import { MailReaderSurface } from "@inboxzero/mail-ui/MailReaderSurface";
 import { isThreadStarred } from "@/app/(app)/[emailAccountId]/mail/star-state";
 import { useThreadTranslation } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
@@ -137,6 +138,12 @@ export function ThreadReader({
     latestShownMessage(messages, hiddenDraftMessageIds) ??
     thread?.messages.at(-1) ??
     messages.at(-1);
+  // The list row's messages carry placeholder ids, so the assistant works on
+  // the latest real message loaded from the provider, never on a draft.
+  const assistantMessage = messages.findLast(
+    (message) =>
+      !message.id.includes(":p:") && !message.labelIds?.includes("DRAFT"),
+  );
   const translation = useThreadTranslation(
     emailAccountId,
     headerMessage?.threadId,
@@ -244,6 +251,17 @@ export function ThreadReader({
         <EmailThread
           renderToolbar={renderToolbar}
           renderMessageMenu={renderMessageMenu}
+          renderMessageFooter={(message) =>
+            emailAccountId && message.id === assistantMessage?.id ? (
+              <AssistantActivity
+                key={message.id}
+                emailAccountId={emailAccountId}
+                messageId={message.id}
+                threadId={message.threadId}
+                onDraftReady={refetch}
+              />
+            ) : null
+          }
           enableMessageNavigation={enableMessageNavigation}
           autoOpenReplyForMessageId={autoOpenReplyForMessageId}
           autoOpenForwardForMessageId={autoOpenForwardForMessageId}

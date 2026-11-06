@@ -223,7 +223,7 @@ test("advances the split reader after archiving an open conversation", async ({
       await expect(emailFrame).toHaveAttribute("data-email-ready", "true");
       const emailBody = emailFrame.contentFrame().locator("body");
       await emailBody.click();
-      await emailBody.press("h");
+      await emailBody.press("s");
       await expect(
         page.getByPlaceholder("When should it return? Try Friday at 3pm"),
       ).toBeVisible();

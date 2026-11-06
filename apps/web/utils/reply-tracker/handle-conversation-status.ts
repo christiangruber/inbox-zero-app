@@ -2,7 +2,10 @@ import type { EmailAccountWithAI } from "@/utils/llms/types";
 import type { ModelType } from "@/utils/llms/model";
 import type { ParsedMessage, RuleWithActions } from "@/utils/types";
 import type { EmailProvider } from "@/utils/email/types";
-import { aiDetermineThreadStatus } from "@/utils/ai/reply/determine-thread-status";
+import {
+  aiDetermineThreadStatus,
+  type ThreadStatusResult,
+} from "@/utils/ai/reply/determine-thread-status";
 import { createScopedLogger } from "@/utils/logger";
 import { SystemType, ThreadTrackerType } from "@/generated/prisma/enums";
 import prisma from "@/utils/prisma";
@@ -37,6 +40,7 @@ export async function determineConversationStatus({
 }): Promise<{
   rule: RuleWithActions | null;
   reason: string;
+  decision?: ConversationStatusDecision;
 }> {
   logger.info("Determining conversation status", {
     messageId: message.id,
@@ -78,13 +82,20 @@ export async function determineConversationStatus({
     ? provider.isSentMessage(lastMessage)
     : false;
 
-  const { status, rationale } = await aiDetermineThreadStatus({
-    emailAccount,
-    threadMessages: threadMessagesForLLM,
-    modelType,
-    userSentLastEmail,
-    conversationRules,
-  });
+  const { status, rationale, decidedBy, confidence } =
+    await aiDetermineThreadStatus({
+      emailAccount,
+      threadMessages: threadMessagesForLLM,
+      modelType,
+      userSentLastEmail,
+      conversationRules,
+    });
+  const decision: ConversationStatusDecision = {
+    status,
+    decidedBy,
+    confidence,
+    messageCount: sortedMessages.length,
+  };
 
   logger.info("AI determined thread status", {
     status,
@@ -107,14 +118,21 @@ export async function determineConversationStatus({
     return {
       rule: null,
       reason: `Conversation status determined as ${status}, but no rule enabled for this status`,
+      decision,
     };
   }
 
   return {
     rule,
     reason: rationale,
+    decision,
   };
 }
+
+type ConversationStatusDecision = Pick<
+  ThreadStatusResult,
+  "status" | "decidedBy" | "confidence"
+> & { messageCount: number };
 
 export async function updateThreadTrackers({
   emailAccountId,

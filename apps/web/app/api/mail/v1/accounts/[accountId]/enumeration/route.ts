@@ -13,6 +13,10 @@ import {
   unsupportedVersionResponse,
 } from "@/utils/mail-api/authorization";
 import { createEmailProviderMailboxSource } from "@/utils/mail-api/source";
+import {
+  ENUMERATION_PAGE_COST,
+  takeBackgroundSyncBudget,
+} from "@/utils/mail-api/sync-budget";
 
 export const POST = withEmailProvider(
   "mail/v1/enumeration",
@@ -41,6 +45,20 @@ export const POST = withEmailProvider(
       requestId,
     );
     if (bodyMismatch) return bodyMismatch;
+    const budget = await takeBackgroundSyncBudget(
+      request.auth.emailAccountId,
+      ENUMERATION_PAGE_COST,
+    );
+    if (!budget.ok) {
+      return sourceFailureResponse(
+        {
+          status: "paused",
+          reason: "throttled",
+          retryAfterMs: budget.retryAfterMs,
+        },
+        requestId,
+      );
+    }
     const source = createEmailProviderMailboxSource({
       provider: request.emailProvider,
       accountId: request.auth.emailAccountId,
